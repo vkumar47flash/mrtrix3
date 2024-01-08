@@ -32,6 +32,8 @@
 
 using namespace MR;
 using namespace App;
+using value_type = float;
+
 
 void usage() {
 
@@ -68,8 +70,15 @@ void usage() {
 
       + Option("lmax",
                "specify the maximum harmonic degree of the response function to estimate "
-               "(can be a comma-separated list for multi-shell data)") +
-      Argument("values").type_sequence_int();
+               "(can be a comma-separated list for multi-shell data)")
+      +   Argument("values").type_sequence_int()
+
+      +Option ("zsh",
+               "Output estimated zonal harmonics to the specified image")
+
+      +   Argument("image").type_image_out();
+
+
 
   REFERENCES
   +"Smith, R. E.; Dhollander, T. & Connelly, A. " // Internal
@@ -120,6 +129,7 @@ public:
           b(Eigen::VectorXd::Zero(M.rows())),
           count(0) {}
 
+
     const int lmax;
     const Eigen::MatrixXd &dirs;
     const vector<size_t> &volumes;
@@ -128,8 +138,9 @@ public:
     size_t count;
   };
 
-  Accumulator(Shared &shared)
-      : S(shared), amplitudes(S.volumes.size()), b(S.b), M(S.M), count(0), rotated_dirs_cartesian(S.dirs.rows(), 3) {}
+
+  Accumulator(Shared &shared, Image<value_type> &zsh)
+      : S(shared), amplitudes(S.volumes.size()), b(S.b), btemp(S.b), M(S.M), count(0), rotated_dirs_cartesian(S.dirs.rows(), 3), ZSHimg(zsh) {}
 
   ~Accumulator() {
     // accumulate results from all threads:
@@ -177,14 +188,26 @@ public:
       }
 
       // accumulate results:
-      b += transform.transpose() * amplitudes;
+      btemp.noalias() = transform.transpose() * amplitudes;
+      if (ZSHimg.valid()){
+          assign_pos_of(amp_image, 0, 3).to(ZSHimg);
+          for (size_t i = 0; i < btemp.size(); ++i) {
+            ZSHimg.index(3) = i;
+            ZSHimg.value() = btemp[i];
+          }
+      }
+
+
+
+      b += btemp;
       M.selfadjointView<Eigen::Lower>().rankUpdate(transform.transpose());
     }
   }
 
 protected:
   Shared &S;
-  Eigen::VectorXd amplitudes, b;
+  Image<value_type> ZSHimg;
+  Eigen::VectorXd amplitudes, b, btemp;
   Eigen::MatrixXd M, transform;
   size_t count;
   Eigen::Matrix<default_type, Eigen::Dynamic, 3> rotated_dirs_cartesian;
@@ -294,6 +317,22 @@ void run() {
 
   Eigen::MatrixXd responses(dirs_azel.size(), Math::ZSH::NforL(max_lmax));
 
+
+
+
+  Image<value_type> ZSHimg;
+  opt = get_options("zsh");
+  bool zsi = opt.size()>0;
+
+  if (zsi) {
+      header.ndim() = 5;
+      header.size(3) = responses.rows();
+      header.size(4) = dirs_azel.size();
+      ZSHimg = Image<value_type>::create(opt[0][0], header);
+  }
+
+
+
   for (size_t shell_index = 0; shell_index != dirs_azel.size(); ++shell_index) {
 
     // check the ZSH -> amplitude transform upfront:
@@ -309,10 +348,12 @@ void run() {
       }
     }
 
+
+
     auto dirs_cartesian = Math::Sphere::spherical2cartesian(dirs_azel[shell_index]);
 
     Accumulator::Shared shared(lmax[shell_index], volumes[shell_index], dirs_cartesian);
-    ThreadedLoop(image, 0, 3).run(Accumulator(shared), image, dir_image, mask);
+    ThreadedLoop(image, 0, 3).run(Accumulator(shared, ZSHimg), image, dir_image, mask);
 
     Eigen::VectorXd rf;
     // Is this anything other than an isotropic response?
