@@ -326,7 +326,7 @@ void run() {
 
   if (zsi) {
       header.ndim() = 5;
-      header.size(3) = responses.rows();
+      header.size(3) = responses.cols();
       header.size(4) = dirs_azel.size();
       ZSHimg = Image<value_type>::create(opt[0][0], header);
   }
@@ -351,6 +351,9 @@ void run() {
 
 
     auto dirs_cartesian = Math::Sphere::spherical2cartesian(dirs_azel[shell_index]);
+
+    if (ZSHimg.valid())
+        ZSHimg.index(4) = shell_index;
 
     Accumulator::Shared shared(lmax[shell_index], volumes[shell_index], dirs_cartesian);
     ThreadedLoop(image, 0, 3).run(Accumulator(shared, ZSHimg), image, dir_image, mask);
