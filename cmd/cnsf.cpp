@@ -105,6 +105,9 @@ void run() {
       responses[n].conservativeResize(responses[n].rows(), nlmax);
       DEBUG ("resized response for \"" + odf_images[n].name() + "\" to " + str(responses[n].cols()) + " to match ODF");
     }
+    if (n > 0)
+      if (responses[n].cols() > responses[n-1].cols())
+        throw Exception ("please list ODFs in order of decreasing lmax!");
   }
 
   size_t nl = 0;
@@ -113,16 +116,45 @@ void run() {
 
   INFO ("maximum harmonic order is " + str(2*(nl-1)));
 
+  std::vector<std::vector<Eigen::MatrixXf>> odfs (nl);
+
+  for (size_t l = 0; l < nl; ++l) {
+    size_t nt_at_l = 0;
+    for (int t = 0; t < odf_images.size(); ++t) {
+      size_t nl_t = Math::SH::LforN (odf_images[t].size(3))/2+1;
+      if (l <= nl_t)
+        nt_at_l++;
+    }
+
+    if (odfs[l].empty())
+      odfs[l].resize (2*l+1, Eigen::MatrixXf::Zero(nvoxels,nt_at_l));
+  }
+
+
+
   std::vector<Eigen::MatrixXf> zsh (nl, Eigen::MatrixXf::Zero (nvoxels,nbvalues));
-  for (size_t n = 0; n < nl; ++n) {
-    zsh_image.index(3) = n;
+  for (size_t l = 0; l < nl; ++l) {
+    zsh_image.index(3) = l;
 
     size_t v = 0;
     Eigen::VectorXf vals;
-    for (auto l = Loop ("loading ZSH coefficients for L=" + str(2*n), zsh_image, 0, 3) (zsh_image); l; ++l) {
+    for (auto _loop = Loop ("loading ZSH & ODF coefficients for L=" + str(2*l), zsh_image, 0, 3) (zsh_image); _loop; ++_loop) {
       vals = zsh_image.row(4);
       if (vals.allFinite() && vals.any()) {
-        zsh[n].row(v++) = vals;
+        zsh[l].row(v) = vals;
+
+        for (size_t t = 0; t < odf_images.size(); ++t) {
+          if (odf_images[t].size(3) < Math::SH::NforL (2*l))
+            break;
+          assign_pos_of (zsh_image, 0, 3).to (odf_images[t]);
+          size_t m1 = Math::SH::index (2*l, -2*l);
+          for (size_t m = 0; m < 2*l+1; m++) {
+            odf_images[t].index(3) = m1+m;
+            odfs[l][m](v,t) = odf_images[t].value();
+          }
+        }
+
+        v++;
       }
     }
   }
